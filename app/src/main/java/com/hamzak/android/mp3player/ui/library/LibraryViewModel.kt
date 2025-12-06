@@ -1,6 +1,7 @@
 package com.hamzak.android.mp3player.ui.library
 
 import android.app.Application
+import android.content.Intent
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import androidx.lifecycle.ViewModel
@@ -30,8 +31,14 @@ class LibraryViewModel @Inject constructor(
 
     fun addSong(uri: Uri) {
         viewModelScope.launch(Dispatchers.IO) {
-            val metadataRetriever = MediaMetadataRetriever()
             try {
+                val contentResolver = application.contentResolver
+                contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+
+                val metadataRetriever = MediaMetadataRetriever()
                 metadataRetriever.setDataSource(application, uri)
 
                 val title = metadataRetriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE) ?: "Unknown Title"
@@ -48,10 +55,10 @@ class LibraryViewModel @Inject constructor(
                 )
 
                 songDao.insertSong(song)
+
+                metadataRetriever.release()
             } catch (e: Exception) {
                 e.printStackTrace()
-            } finally {
-                metadataRetriever.release()
             }
         }
     }
