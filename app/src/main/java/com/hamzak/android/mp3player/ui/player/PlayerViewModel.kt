@@ -1,17 +1,25 @@
 package com.hamzak.android.mp3player.ui.player
 
+import android.content.ComponentName
+import android.content.Context
+import androidx.concurrent.futures.await
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
-import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.session.MediaController
+import androidx.media3.session.SessionToken
+import com.google.common.util.concurrent.ListenableFuture
 import com.hamzak.android.mp3player.data.local.Song
 import com.hamzak.android.mp3player.data.local.SongDao
+import com.hamzak.android.mp3player.service.PlaybackService
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -19,25 +27,31 @@ import javax.inject.Inject
 class PlayerViewModel @Inject constructor(
     private val savedStateHandle: SavedStateHandle,
     private val songDao: SongDao,
-    private val exoPlayer: ExoPlayer
+    @ApplicationContext private val context: Context
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow<PlayerUiState>(PlayerUiState.Loading)
     val uiState = _uiState.asStateFlow()
 
+    private val mediaControllerFuture: ListenableFuture<MediaController> = MediaController.Builder(
+        context,
+        SessionToken(context, ComponentName(context, PlaybackService::class.java))
+    ).buildAsync()
+    private var mediaController: MediaController? = null
+
     private val listener = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
-            val currentState = _uiState.value
-            if (currentState is PlayerUiState.Ready) {
-                _uiState.value = currentState.copy(isPlaying = isPlaying)
+            _uiState.update {
+                if (it is PlayerUiState.Ready) it.copy(isPlaying = isPlaying) else it
             }
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
-            if (playbackState == Player.STATE_READY) {
-                val currentState = _uiState.value
-                if (currentState is PlayerUiState.Ready) {
-                    _uiState.value = currentState.copy(duration = exoPlayer.duration)
+            mediaController?.let { controller ->
+                if (playbackState == Player.STATE_READY) {
+                    _uiState.update {
+                        if (it is PlayerUiState.Ready) it.copy(duration = controller.duration) else it
+                    }
                 }
             }
         }
@@ -48,70 +62,95 @@ class PlayerViewModel @Inject constructor(
             reason: Int
         ) {
             if (reason == Player.DISCONTINUITY_REASON_SEEK) {
-                val currentState = _uiState.value
-                if (currentState is PlayerUiState.Ready && currentState.isSeeking) {
-                    _uiState.value = currentState.copy(
-                        isSeeking = false,
-                        currentPosition = newPosition.positionMs
-                    )
+                _uiState.update {
+                    if (it is PlayerUiState.Ready && it.isSeeking) {
+                        it.copy(isSeeking = false, currentPosition = newPosition.positionMs)
+                    } else {
+                        it
+                    }
                 }
             }
         }
     }
 
     init {
-        exoPlayer.addListener(listener)
-
         viewModelScope.launch {
-            val songId = savedStateHandle.get<Int>("songId")
-            if (songId != null) {
-                val song = songDao.getSongById(songId)
-                if (song != null) {
-                    _uiState.value = PlayerUiState.Ready(song)
-                    exoPlayer.setMediaItem(MediaItem.fromUri(song.path))
-                    exoPlayer.prepare()
-                } else {
-                    _uiState.value = PlayerUiState.Error("Song not found")
-                }
-            } else {
-                _uiState.value = PlayerUiState.Error("Song ID not provided")
-            }
+            if (!connectToController()) return@launch
+            if (!loadInitialSong()) return@launch
+
+            startPositionUpdates()
+        }
+    }
+
+    private suspend fun connectToController(): Boolean {
+        return try {
+            mediaController = mediaControllerFuture.await()
+            mediaController?.addListener(listener)
+            true
+        } catch (e: Exception) {
+            _uiState.update { PlayerUiState.Error("Failed to connect to media service") }
+            false
+        }
+    }
+
+    private suspend fun loadInitialSong(): Boolean {
+        val songId = savedStateHandle.get<Int>("songId")
+        if (songId == null) {
+            _uiState.update { PlayerUiState.Error("Song ID not provided") }
+            return false
         }
 
-        viewModelScope.launch {
-            while (true) {
-                val currentState = _uiState.value
-                if (currentState is PlayerUiState.Ready && !currentState.isSeeking) {
-                    _uiState.value = currentState.copy(currentPosition = exoPlayer.currentPosition)
+        val song = songDao.getSongById(songId)
+        if (song != null) {
+            _uiState.update { PlayerUiState.Ready(song = song) }
+            val mediaItem = MediaItem.fromUri(song.path)
+            mediaController?.setMediaItem(mediaItem)
+            mediaController?.prepare()
+            return true
+        } else {
+            _uiState.update { PlayerUiState.Error("Song not found") }
+            return false
+        }
+    }
+
+    private suspend fun startPositionUpdates() {
+        while (true) {
+            mediaController?.let { controller ->
+                _uiState.update {
+                    if (it is PlayerUiState.Ready && !it.isSeeking) {
+                        it.copy(currentPosition = controller.currentPosition)
+                    } else {
+                        it
+                    }
                 }
-                delay(200)
             }
+            delay(200)
         }
     }
 
     fun play() {
-        exoPlayer.play()
+        mediaController?.play()
     }
 
     fun pause() {
-        exoPlayer.pause()
+        mediaController?.pause()
     }
 
     fun seekTo(position: Long) {
-        val currentState = _uiState.value
-        if (currentState is PlayerUiState.Ready) {
-            _uiState.value = currentState.copy(
-                isSeeking = true,
-                currentPosition = position
-            )
+        _uiState.update {
+            if (it is PlayerUiState.Ready) {
+                it.copy(isSeeking = true, currentPosition = position)
+            } else {
+                it
+            }
         }
-        exoPlayer.seekTo(position)
+        mediaController?.seekTo(position)
     }
 
     override fun onCleared() {
         super.onCleared()
-        exoPlayer.removeListener(listener)
-        exoPlayer.release()
+        mediaController?.removeListener(listener)
+        MediaController.releaseFuture(mediaControllerFuture)
     }
 }
 

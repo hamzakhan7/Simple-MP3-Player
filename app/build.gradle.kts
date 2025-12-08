@@ -64,12 +64,17 @@ dependencies {
 
     // Media3 (ExoPlayer)
     implementation(libs.media3.exoplayer)
+    implementation(libs.media3.session)
+    implementation(libs.media3.ui)
 
     // Lifecycle-ViewModel-Compose
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     
     // Navigation-Compose
     implementation(libs.androidx.navigation.compose)
+
+    // Concurrent-Futures-Ktx
+    implementation(libs.androidx.concurrent.futures.ktx)
 
 
     testImplementation(libs.junit)

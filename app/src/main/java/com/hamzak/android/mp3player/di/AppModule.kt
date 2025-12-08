@@ -1,7 +1,6 @@
 package com.hamzak.android.mp3player.di
 
 import android.content.Context
-import androidx.media3.exoplayer.ExoPlayer
 import androidx.room.Room
 import com.hamzak.android.mp3player.data.local.AppDatabase
 import com.hamzak.android.mp3player.data.local.SongDao
@@ -30,10 +29,5 @@ object AppModule {
     @Singleton
     fun provideSongDao(appDatabase: AppDatabase): SongDao {
         return appDatabase.songDao()
-    }
-
-    @Provides
-    fun provideExoPlayer(@ApplicationContext context: Context): ExoPlayer {
-        return ExoPlayer.Builder(context).build()
     }
 }
