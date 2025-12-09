@@ -12,7 +12,7 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
 import com.hamzak.android.mp3player.data.local.Song
-import com.hamzak.android.mp3player.data.local.SongDao
+import com.hamzak.android.mp3player.data.repository.SongRepository
 import com.hamzak.android.mp3player.service.PlaybackService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -27,7 +27,7 @@ import javax.inject.Inject
 @HiltViewModel
 class PlayerViewModel @Inject constructor(
     private val savedStateHandle: SavedStateHandle,
-    private val songDao: SongDao,
+    private val songRepository: SongRepository,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -118,7 +118,7 @@ class PlayerViewModel @Inject constructor(
             return false
         }
 
-        songs = songDao.getAllSongs().first()
+        songs = songRepository.getAllSongs().first()
         val initialSongIndex = songs.indexOfFirst { it.id == songId }
 
         if (initialSongIndex != -1) {
