@@ -127,6 +127,7 @@ class PlayerViewModel @Inject constructor(
             val mediaItems = songs.map { MediaItem.fromUri(it.path) }
             mediaController?.setMediaItems(mediaItems, initialSongIndex, 0)
             mediaController?.prepare()
+            mediaController?.play()
             return true
         } else {
             _uiState.update { PlayerUiState.Error("Song not found") }
