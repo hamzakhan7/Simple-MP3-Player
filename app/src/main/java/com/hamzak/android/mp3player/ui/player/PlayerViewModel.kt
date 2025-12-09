@@ -2,11 +2,13 @@ package com.hamzak.android.mp3player.ui.player
 
 import android.content.ComponentName
 import android.content.Context
+import android.net.Uri
 import androidx.concurrent.futures.await
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
@@ -20,9 +22,12 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+import androidx.core.net.toUri
 
 @HiltViewModel
 class PlayerViewModel @Inject constructor(
@@ -34,119 +39,101 @@ class PlayerViewModel @Inject constructor(
     private val _uiState = MutableStateFlow<PlayerUiState>(PlayerUiState.Loading)
     val uiState = _uiState.asStateFlow()
 
+    private var mediaController: MediaController? = null
     private val mediaControllerFuture: ListenableFuture<MediaController> = MediaController.Builder(
         context,
         SessionToken(context, ComponentName(context, PlaybackService::class.java))
     ).buildAsync()
-    private var mediaController: MediaController? = null
 
-    private var songs: List<Song> = emptyList()
-
-    private val listener = object : Player.Listener {
+    private val playerListener = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
-            _uiState.update {
-                if (it is PlayerUiState.Ready) it.copy(isPlaying = isPlaying) else it
-            }
+            updateReadyState { it.copy(isPlaying = isPlaying) }
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
-            mediaController?.let { controller ->
-                if (playbackState == Player.STATE_READY) {
-                    _uiState.update {
-                        if (it is PlayerUiState.Ready) it.copy(duration = controller.duration) else it
-                    }
-                }
-            }
-        }
-
-        override fun onPositionDiscontinuity(
-            oldPosition: Player.PositionInfo,
-            newPosition: Player.PositionInfo,
-            reason: Int
-        ) {
-            if (reason == Player.DISCONTINUITY_REASON_SEEK) {
-                _uiState.update {
-                    if (it is PlayerUiState.Ready && it.isSeeking) {
-                        it.copy(isSeeking = false, currentPosition = newPosition.positionMs)
-                    } else {
-                        it
-                    }
-                }
+            if (playbackState == Player.STATE_READY) {
+                updateReadyState { it.copy(duration = mediaController?.duration ?: 0) }
             }
         }
 
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-            super.onMediaItemTransition(mediaItem, reason)
-            mediaController?.let { controller ->
-                if (controller.mediaItemCount == 0) return@let
-                val song = songs[controller.currentMediaItemIndex]
-                _uiState.update {
-                    if (it is PlayerUiState.Ready) {
-                        it.copy(song = song)
-                    } else {
-                        PlayerUiState.Ready(song = song)
-                    }
-                }
+            if (mediaItem == null) return
+            val currentSong = songs.find { it.id.toString() == mediaItem.mediaId }
+            if (currentSong != null) {
+                updateReadyState { it.copy(song = currentSong) }
             }
         }
     }
+
+    private val songs: MutableList<Song> = mutableListOf()
 
     init {
         viewModelScope.launch {
-            if (!connectToController()) return@launch
-            if (!loadInitialSongs()) return@launch
-
-            startPositionUpdates()
+            initializePlayer()
         }
     }
 
-    private suspend fun connectToController(): Boolean {
-        return try {
+    private suspend fun initializePlayer() {
+        try {
             mediaController = mediaControllerFuture.await()
-            mediaController?.addListener(listener)
-            true
-        } catch (e: Exception) {
-            _uiState.update { PlayerUiState.Error("Failed to connect to media service") }
-            false
-        }
-    }
+            mediaController?.addListener(playerListener)
 
-    private suspend fun loadInitialSongs(): Boolean {
-        val songId = savedStateHandle.get<Int>("songId")
-        if (songId == null) {
-            _uiState.update { PlayerUiState.Error("Song ID not provided") }
-            return false
-        }
+            val songId = savedStateHandle.get<Int>("songId")
+            if (songId == null) {
+                _uiState.update { PlayerUiState.Error("Song not found") }
+                return
+            }
 
-        songs = songRepository.getAllSongs().first()
-        val initialSongIndex = songs.indexOfFirst { it.id == songId }
+            val allSongs = songRepository.getAllSongs().first()
+            songs.clear()
+            songs.addAll(allSongs)
 
-        if (initialSongIndex != -1) {
+            val initialSongIndex = songs.indexOfFirst { it.id == songId }
+            if (initialSongIndex == -1) {
+                _uiState.update { PlayerUiState.Error("Song not found") }
+                return
+            }
+
             val initialSong = songs[initialSongIndex]
             _uiState.update { PlayerUiState.Ready(song = initialSong) }
-            val mediaItems = songs.map { MediaItem.fromUri(it.path) }
+
+            val mediaItems = songs.map { song ->
+                val metadata = MediaMetadata.Builder()
+                    .setTitle(song.title)
+                    .setArtist(song.artist)
+                    .setAlbumTitle(song.album)
+                    .setArtworkUri(song.path.toUri())
+                    .build()
+                MediaItem.Builder()
+                    .setUri(song.path)
+                    .setMediaId(song.id.toString())
+                    .setMediaMetadata(metadata)
+                    .build()
+            }
+
             mediaController?.setMediaItems(mediaItems, initialSongIndex, 0)
             mediaController?.prepare()
             mediaController?.play()
-            return true
-        } else {
-            _uiState.update { PlayerUiState.Error("Song not found") }
-            return false
+
+            startPositionUpdates()
+
+        } catch (e: Exception) {
+            _uiState.update { PlayerUiState.Error("Failed to connect to media service") }
         }
     }
 
-    private suspend fun startPositionUpdates() {
-        while (true) {
-            mediaController?.let { controller ->
-                _uiState.update {
-                    if (it is PlayerUiState.Ready && !it.isSeeking) {
-                        it.copy(currentPosition = controller.currentPosition)
+    private fun startPositionUpdates() {
+        viewModelScope.launch {
+            while (true) {
+                updateReadyState { state ->
+                    if (!state.isSeeking) {
+                        state.copy(currentPosition = mediaController?.currentPosition ?: 0)
                     } else {
-                        it
+                        state
                     }
                 }
+                delay(200)
             }
-            delay(200)
         }
     }
 
@@ -167,19 +154,24 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun seekTo(position: Long) {
-        _uiState.update {
-            if (it is PlayerUiState.Ready) {
-                it.copy(isSeeking = true, currentPosition = position)
-            } else {
-                it
-            }
-        }
+        updateReadyState { it.copy(isSeeking = true, currentPosition = position) }
         mediaController?.seekTo(position)
+        // We need to reset isSeeking after the seek is complete.
+        viewModelScope.launch {
+            delay(200) // Give time for the seek to process
+            updateReadyState { it.copy(isSeeking = false) }
+        }
+    }
+
+    private fun updateReadyState(update: (PlayerUiState.Ready) -> PlayerUiState) {
+        _uiState.update { currentState ->
+            if (currentState is PlayerUiState.Ready) update(currentState) else currentState
+        }
     }
 
     override fun onCleared() {
         super.onCleared()
-        mediaController?.removeListener(listener)
+        mediaController?.removeListener(playerListener)
         MediaController.releaseFuture(mediaControllerFuture)
     }
 }

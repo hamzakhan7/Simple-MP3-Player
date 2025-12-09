@@ -1,5 +1,6 @@
 package com.hamzak.android.mp3player.ui.player
 
+import android.content.res.Configuration
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -29,8 +30,10 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.hamzak.android.mp3player.data.local.Song
 
 @Composable
 fun PlayerScreen(
@@ -81,60 +84,122 @@ fun PlayerContent(
     onSkipToPrevious: () -> Unit,
     onSeek: (Long) -> Unit
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        Card(
-            modifier = Modifier.size(300.dp),
-            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+    val configuration = LocalConfiguration.current
+    val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+
+    if (isLandscape) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceEvenly
         ) {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
+            AlbumArt(songPath = state.song.path, modifier = Modifier.size(200.dp))
+            Column(
+                modifier = Modifier.weight(1f).padding(horizontal = 16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
             ) {
-                Icon(
-                    imageVector = Icons.Default.MusicNote,
-                    contentDescription = "Music Note Placeholder",
-                    modifier = Modifier.size(100.dp)
+                SongDetails(song = state.song)
+                Spacer(modifier = Modifier.height(16.dp))
+                PlayerSlider(state = state, onSeek = onSeek)
+                PlayerControls(
+                    isPlaying = state.isPlaying,
+                    onPlay = onPlay,
+                    onPause = onPause,
+                    onSkipToPrevious = onSkipToPrevious,
+                    onSkipToNext = onSkipToNext
                 )
             }
         }
-
-        Spacer(modifier = Modifier.height(32.dp))
-
-        Text(text = state.song.title, style = MaterialTheme.typography.headlineMedium)
-        Text(text = state.song.artist, style = MaterialTheme.typography.bodyLarge)
-        Spacer(modifier = Modifier.height(32.dp))
-
-        Slider(
-            value = state.currentPosition.toFloat(),
-            onValueChange = { onSeek(it.toLong()) },
-            valueRange = 0f..state.duration.toFloat(),
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.CenterVertically
+    } else {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
         ) {
-            IconButton(onClick = onSkipToPrevious) {
-                Icon(Icons.Default.SkipPrevious, contentDescription = "Skip Previous", modifier = Modifier.size(48.dp))
-            }
-            IconButton(onClick = { if (state.isPlaying) onPause() else onPlay() }) {
-                Icon(
-                    imageVector = if (state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                    contentDescription = if (state.isPlaying) "Pause" else "Play",
-                    modifier = Modifier.size(72.dp)
-                )
-            }
-            IconButton(onClick = onSkipToNext) {
-                Icon(Icons.Default.SkipNext, contentDescription = "Skip Next", modifier = Modifier.size(48.dp))
-            }
+            AlbumArt(songPath = state.song.path, modifier = Modifier.size(300.dp))
+            Spacer(modifier = Modifier.height(32.dp))
+            SongDetails(song = state.song)
+            Spacer(modifier = Modifier.height(32.dp))
+            PlayerSlider(state = state, onSeek = onSeek)
+            PlayerControls(
+                isPlaying = state.isPlaying,
+                onPlay = onPlay,
+                onPause = onPause,
+                onSkipToPrevious = onSkipToPrevious,
+                onSkipToNext = onSkipToNext
+            )
+        }
+    }
+}
+
+@Composable
+private fun AlbumArt(songPath: String, modifier: Modifier = Modifier) {
+    Card(
+        modifier = modifier,
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+    ) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Icon(
+                imageVector = Icons.Default.MusicNote,
+                contentDescription = "Music Note Placeholder",
+                modifier = Modifier.size(100.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun SongDetails(song: Song, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(text = song.title, style = MaterialTheme.typography.headlineMedium)
+        Text(text = song.artist, style = MaterialTheme.typography.bodyLarge)
+    }
+}
+
+@Composable
+private fun PlayerSlider(state: PlayerUiState.Ready, onSeek: (Long) -> Unit) {
+    Slider(
+        value = state.currentPosition.toFloat(),
+        onValueChange = { onSeek(it.toLong()) },
+        valueRange = 0f..state.duration.toFloat(),
+        modifier = Modifier.fillMaxWidth()
+    )
+}
+
+@Composable
+private fun PlayerControls(
+    isPlaying: Boolean,
+    onPlay: () -> Unit,
+    onPause: () -> Unit,
+    onSkipToPrevious: () -> Unit,
+    onSkipToNext: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        IconButton(onClick = onSkipToPrevious) {
+            Icon(Icons.Default.SkipPrevious, contentDescription = "Skip Previous", modifier = Modifier.size(48.dp))
+        }
+        IconButton(onClick = { if (isPlaying) onPause() else onPlay() }) {
+            Icon(
+                imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                contentDescription = if (isPlaying) "Pause" else "Play",
+                modifier = Modifier.size(72.dp)
+            )
+        }
+        IconButton(onClick = onSkipToNext) {
+            Icon(Icons.Default.SkipNext, contentDescription = "Skip Next", modifier = Modifier.size(48.dp))
         }
     }
 }
