@@ -19,6 +19,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -38,6 +39,8 @@ class PlayerViewModel @Inject constructor(
         SessionToken(context, ComponentName(context, PlaybackService::class.java))
     ).buildAsync()
     private var mediaController: MediaController? = null
+
+    private var songs: List<Song> = emptyList()
 
     private val listener = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -71,12 +74,27 @@ class PlayerViewModel @Inject constructor(
                 }
             }
         }
+
+        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            super.onMediaItemTransition(mediaItem, reason)
+            mediaController?.let { controller ->
+                if (controller.mediaItemCount == 0) return@let
+                val song = songs[controller.currentMediaItemIndex]
+                _uiState.update {
+                    if (it is PlayerUiState.Ready) {
+                        it.copy(song = song)
+                    } else {
+                        PlayerUiState.Ready(song = song)
+                    }
+                }
+            }
+        }
     }
 
     init {
         viewModelScope.launch {
             if (!connectToController()) return@launch
-            if (!loadInitialSong()) return@launch
+            if (!loadInitialSongs()) return@launch
 
             startPositionUpdates()
         }
@@ -93,18 +111,21 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
-    private suspend fun loadInitialSong(): Boolean {
+    private suspend fun loadInitialSongs(): Boolean {
         val songId = savedStateHandle.get<Int>("songId")
         if (songId == null) {
             _uiState.update { PlayerUiState.Error("Song ID not provided") }
             return false
         }
 
-        val song = songDao.getSongById(songId)
-        if (song != null) {
-            _uiState.update { PlayerUiState.Ready(song = song) }
-            val mediaItem = MediaItem.fromUri(song.path)
-            mediaController?.setMediaItem(mediaItem)
+        songs = songDao.getAllSongs().first()
+        val initialSongIndex = songs.indexOfFirst { it.id == songId }
+
+        if (initialSongIndex != -1) {
+            val initialSong = songs[initialSongIndex]
+            _uiState.update { PlayerUiState.Ready(song = initialSong) }
+            val mediaItems = songs.map { MediaItem.fromUri(it.path) }
+            mediaController?.setMediaItems(mediaItems, initialSongIndex, 0)
             mediaController?.prepare()
             return true
         } else {
@@ -134,6 +155,14 @@ class PlayerViewModel @Inject constructor(
 
     fun pause() {
         mediaController?.pause()
+    }
+
+    fun skipToNext() {
+        mediaController?.seekToNext()
+    }
+
+    fun skipToPrevious() {
+        mediaController?.seekToPrevious()
     }
 
     fun seekTo(position: Long) {
